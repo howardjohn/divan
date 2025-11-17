@@ -1,7 +1,5 @@
 //! Golang benchmark format output.
 
-use std::io::Write;
-
 use crate::{
     alloc::AllocOp,
     counter::{BytesFormat, KnownCounterKind},
