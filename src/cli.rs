@@ -25,13 +25,14 @@ pub(crate) fn command() -> Command {
 
     // Custom arguments not supported by libtest:
     // - bytes-format
+    // - output-format
     // - sample-count
     // - sample-size
     // - timer
     // - sort
     // - sortr
 
-    // TODO: `--format <pretty|terse>`
+    // TODO: `--format <pretty|terse>` - conflicts with our new --output-format
 
     let mut cmd = Command::new("divan");
 
@@ -56,6 +57,13 @@ pub(crate) fn command() -> Command {
                 .conflicts_with("list"),
         )
         .arg(flag("list").help("Lists benchmarks").conflicts_with("test"))
+        .arg(
+            option("output-format")
+                .env("DIVAN_OUTPUT_FORMAT")
+                .value_name("tree|golang")
+                .help("Set the output format for benchmark results")
+                .value_parser(value_parser!(crate::config::OutputFormat))
+        )
         .arg(
             option("color")
                 .value_name("WHEN")
@@ -190,6 +198,20 @@ impl ValueEnum for TimerKind {
         let name = match self {
             Self::Os => "os",
             Self::Tsc => "tsc",
+        };
+        Some(PossibleValue::new(name))
+    }
+}
+
+impl ValueEnum for crate::config::OutputFormat {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[Self::Tree, Self::Golang]
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        let name = match self {
+            Self::Tree => "tree",
+            Self::Golang => "golang",
         };
         Some(PossibleValue::new(name))
     }
