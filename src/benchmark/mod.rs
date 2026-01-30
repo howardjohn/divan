@@ -137,6 +137,64 @@ impl<'a, 'b> Bencher<'a, 'b> {
         self.with_inputs(|| ()).bench_local_values(|_: ()| benched());
     }
 
+    /// Benchmarks an async function on the current thread using a Tokio runtime.
+    ///
+    /// This method requires the `async_tokio` feature to be enabled.
+    ///
+    /// The async runtime is created once and reused for all iterations, avoiding
+    /// the high overhead of creating a new runtime for each iteration.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// #[divan::bench]
+    /// fn bench(bencher: divan::Bencher) {
+    ///     bencher.bench_async(|| async {
+    ///         // Async benchmarked code...
+    ///         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    ///     });
+    /// }
+    /// ```
+    #[cfg(feature = "async_tokio")]
+    pub fn bench_async<O, B, Fut>(self, benched: B)
+    where
+        B: Fn() -> Fut + Sync,
+        Fut: std::future::Future<Output = O> + Send,
+    {
+        // Reusing `bench_async_values` for a zero-sized non-drop input type
+        // should have no overhead.
+        self.with_inputs(|| ()).bench_async_values(|_: ()| benched());
+    }
+
+    /// Benchmarks an async function on the current thread using a Tokio runtime.
+    ///
+    /// This method requires the `async_tokio` feature to be enabled.
+    ///
+    /// The async runtime is created once and reused for all iterations, avoiding
+    /// the high overhead of creating a new runtime for each iteration.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// #[divan::bench]
+    /// fn bench(bencher: divan::Bencher) {
+    ///     bencher.bench_local_async(|| async {
+    ///         // Async benchmarked code...
+    ///         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    ///     });
+    /// }
+    /// ```
+    #[cfg(feature = "async_tokio")]
+    pub fn bench_local_async<O, B, Fut>(self, benched: B)
+    where
+        B: Fn() -> Fut,
+        Fut: std::future::Future<Output = O> + Send,
+    {
+        // Reusing `bench_local_async_values` for a zero-sized non-drop input type
+        // should have no overhead.
+        self.with_inputs(|| ()).bench_local_async_values(|_: ()| benched());
+    }
+
     /// Generate inputs for the [benchmarked function](#input-bench).
     ///
     /// Time spent generating inputs does not affect benchmark timing.
@@ -469,6 +527,211 @@ where
     {
         // TODO: Allow `O` to reference `&mut I` as long as `I` outlives `O`.
         self.context.bench_loop_local(
+            self.config.gen_input,
+            |input| {
+                // SAFETY: Input is guaranteed to be initialized and not
+                // currently referenced by anything else.
+                let input = unsafe { (*input.get()).assume_init_mut() };
+
+                benched(input)
+            },
+            // Input ownership was not transferred to `benched`.
+            |input| {
+                // SAFETY: This function is called after `benched` outputs are
+                // dropped, so we have exclusive access.
+                unsafe { (*input.get()).assume_init_drop() }
+            },
+        );
+    }
+
+    /// Benchmarks an async function over per-iteration [generated inputs](Self::with_inputs),
+    /// provided by-value.
+    ///
+    /// This method requires the `async_tokio` feature to be enabled.
+    ///
+    /// Per-iteration means the benchmarked function is called exactly once for
+    /// each generated input.
+    ///
+    /// The async runtime is created once and reused for all iterations, avoiding
+    /// the high overhead of creating a new runtime for each iteration.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// #[divan::bench]
+    /// fn bench(bencher: divan::Bencher) {
+    ///     bencher
+    ///         .with_inputs(|| {
+    ///             // Generate input:
+    ///             String::from("...")
+    ///         })
+    ///         .bench_async_values(|s| async move {
+    ///             // Use input by-value:
+    ///             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    ///             s + "123"
+    ///         });
+    /// }
+    /// ```
+    #[cfg(feature = "async_tokio")]
+    pub fn bench_async_values<O, B, Fut>(self, benched: B)
+    where
+        B: Fn(I) -> Fut + Sync,
+        GenI: Fn() -> I + Sync,
+        Fut: std::future::Future<Output = O> + Send,
+    {
+        self.context.bench_loop_async_threaded(
+            self.config.gen_input,
+            |input| {
+                // SAFETY: Input is guaranteed to be initialized and not
+                // currently referenced by anything else.
+                let input = unsafe { input.get().read().assume_init() };
+
+                benched(input)
+            },
+            // Input ownership is transferred to `benched`.
+            |_input| {},
+        );
+    }
+
+    /// Benchmarks an async function over per-iteration [generated inputs](Self::with_inputs),
+    /// provided by-value, on the current thread.
+    ///
+    /// This method requires the `async_tokio` feature to be enabled.
+    ///
+    /// Per-iteration means the benchmarked function is called exactly once for
+    /// each generated input.
+    ///
+    /// The async runtime is created once and reused for all iterations, avoiding
+    /// the high overhead of creating a new runtime for each iteration.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// #[divan::bench]
+    /// fn bench(bencher: divan::Bencher) {
+    ///     let mut values = Vec::new();
+    ///     bencher
+    ///         .with_inputs(|| {
+    ///             // Generate input:
+    ///             String::from("...")
+    ///         })
+    ///         .bench_local_async_values(|s| async move {
+    ///             // Use input by-value:
+    ///             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    ///             values.push(s);
+    ///         });
+    /// }
+    /// ```
+    #[cfg(feature = "async_tokio")]
+    pub fn bench_local_async_values<O, B, Fut>(self, benched: B)
+    where
+        B: Fn(I) -> Fut,
+        Fut: std::future::Future<Output = O> + Send,
+    {
+        self.context.bench_loop_async_local(
+            self.config.gen_input,
+            |input| {
+                // SAFETY: Input is guaranteed to be initialized and not
+                // currently referenced by anything else.
+                let input = unsafe { input.get().read().assume_init() };
+
+                benched(input)
+            },
+            // Input ownership is transferred to `benched`.
+            |_input| {},
+        );
+    }
+
+    /// Benchmarks an async function over per-iteration [generated inputs](Self::with_inputs),
+    /// provided by-reference.
+    ///
+    /// This method requires the `async_tokio` feature to be enabled.
+    ///
+    /// Per-iteration means the benchmarked function is called exactly once for
+    /// each generated input.
+    ///
+    /// The async runtime is created once and reused for all iterations, avoiding
+    /// the high overhead of creating a new runtime for each iteration.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// #[divan::bench]
+    /// fn bench(bencher: divan::Bencher) {
+    ///     bencher
+    ///         .with_inputs(|| {
+    ///             // Generate input:
+    ///             String::from("...")
+    ///         })
+    ///         .bench_async_refs(|s| async {
+    ///             // Use input by-reference:
+    ///             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    ///             *s += "123";
+    ///         });
+    /// }
+    /// ```
+    #[cfg(feature = "async_tokio")]
+    pub fn bench_async_refs<O, B, Fut>(self, benched: B)
+    where
+        B: Fn(&mut I) -> Fut + Sync,
+        GenI: Fn() -> I + Sync,
+        Fut: std::future::Future<Output = O> + Send,
+    {
+        // TODO: Allow `O` to reference `&mut I` as long as `I` outlives `O`.
+        self.context.bench_loop_async_threaded(
+            self.config.gen_input,
+            |input| {
+                // SAFETY: Input is guaranteed to be initialized and not
+                // currently referenced by anything else.
+                let input = unsafe { (*input.get()).assume_init_mut() };
+
+                benched(input)
+            },
+            // Input ownership was not transferred to `benched`.
+            |input| {
+                // SAFETY: This function is called after `benched` outputs are
+                // dropped, so we have exclusive access.
+                unsafe { (*input.get()).assume_init_drop() }
+            },
+        );
+    }
+
+    /// Benchmarks an async function over per-iteration [generated inputs](Self::with_inputs),
+    /// provided by-reference, on the current thread.
+    ///
+    /// This method requires the `async_tokio` feature to be enabled.
+    ///
+    /// Per-iteration means the benchmarked function is called exactly once for
+    /// each generated input.
+    ///
+    /// The async runtime is created once and reused for all iterations, avoiding
+    /// the high overhead of creating a new runtime for each iteration.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// #[divan::bench]
+    /// fn bench(bencher: divan::Bencher) {
+    ///     bencher
+    ///         .with_inputs(|| {
+    ///             // Generate input:
+    ///             String::from("...")
+    ///         })
+    ///         .bench_local_async_refs(|s| async {
+    ///             // Use input by-reference:
+    ///             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    ///             *s += "123";
+    ///         });
+    /// }
+    /// ```
+    #[cfg(feature = "async_tokio")]
+    pub fn bench_local_async_refs<O, B, Fut>(self, benched: B)
+    where
+        B: Fn(&mut I) -> Fut,
+        Fut: std::future::Future<Output = O> + Send,
+    {
+        // TODO: Allow `O` to reference `&mut I` as long as `I` outlives `O`.
+        self.context.bench_loop_async_local(
             self.config.gen_input,
             |input| {
                 // SAFETY: Input is guaranteed to be initialized and not
@@ -1398,6 +1661,75 @@ impl<'a> BenchContext<'a> {
             },
             counts,
         }
+    }
+
+    /// Runs the single-threaded loop for benchmarking async `benched`.
+    ///
+    /// This method requires the `async_tokio` feature to be enabled.
+    ///
+    /// # Safety
+    ///
+    /// See `bench_loop_async_threaded`.
+    #[cfg(feature = "async_tokio")]
+    pub fn bench_loop_async_local<I, O, Fut>(
+        &mut self,
+        gen_input: impl FnMut() -> I,
+        benched: impl Fn(&UnsafeCell<MaybeUninit<I>>) -> Fut,
+        drop_input: impl Fn(&UnsafeCell<MaybeUninit<I>>),
+    )
+    where
+        Fut: std::future::Future<Output = O> + Send,
+    {
+        // SAFETY: Closures are guaranteed to run on the current thread, so they
+        // can safely be mutable and non-`Sync`.
+        unsafe {
+            let gen_input = SyncWrap::new(UnsafeCell::new(gen_input));
+            let benched = SyncWrap::new(UnsafeCell::new(benched));
+            let drop_input = SyncWrap::new(drop_input);
+
+            self.thread_count = NonZeroUsize::MIN;
+            self.bench_loop_async_threaded::<I, O, _>(
+                || (*gen_input.get())(),
+                |input| (*benched.get())(input),
+                |input| drop_input(input),
+            )
+        }
+    }
+
+    /// Runs the multi-threaded loop for benchmarking async `benched`.
+    ///
+    /// This method requires the `async_tokio` feature to be enabled.
+    ///
+    /// The async runtime is created once per thread and reused for all iterations,
+    /// avoiding the high overhead of creating a new runtime for each iteration.
+    ///
+    /// # Safety
+    ///
+    /// See `bench_loop_threaded`.
+    #[cfg(feature = "async_tokio")]
+    fn bench_loop_async_threaded<I, O, Fut>(
+        &mut self,
+        gen_input: impl Fn() -> I + Sync,
+        benched: impl Fn(&UnsafeCell<MaybeUninit<I>>) -> Fut + Sync,
+        drop_input: impl Fn(&UnsafeCell<MaybeUninit<I>>) + Sync,
+    )
+    where
+        Fut: std::future::Future<Output = O> + Send,
+    {
+        // Create a tokio runtime once to reuse for all iterations.
+        // We use current_thread runtime to avoid the overhead of thread pools.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("Failed to create Tokio runtime");
+
+        // Wrap the benched closure to use block_on
+        let benched_sync = |input: &UnsafeCell<MaybeUninit<I>>| -> O {
+            let future = benched(input);
+            runtime.block_on(future)
+        };
+
+        // Delegate to the regular bench_loop_threaded with the wrapped closure
+        self.bench_loop_threaded(gen_input, benched_sync, drop_input)
     }
 }
 

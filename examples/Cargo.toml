@@ -9,7 +9,7 @@ readme = "../README.md"
 publish = false
 
 [dependencies]
-divan = { workspace = true }
+divan = { workspace = true, features = ["async_tokio"] }
 fastrand = "2"
 image = { version = "0.24", optional = true }
 libc = "0.2.147"
@@ -106,4 +106,8 @@ harness = false
 
 [[bench]]
 name = "time"
+harness = false
+
+[[bench]]
+name = "async_functions"
 harness = false
