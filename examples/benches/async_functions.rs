@@ -15,9 +15,9 @@ async fn async_add(a: u64, b: u64) -> u64 {
     a + b
 }
 
-// Async function with artificial delay to simulate I/O
+// Async function performing computation
 async fn async_compute(n: u64) -> u64 {
-    // Simulate some async work
+    // Simulate some computation
     let mut sum = 0;
     for i in 0..n {
         sum += i;

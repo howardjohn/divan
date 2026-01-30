@@ -137,12 +137,16 @@ impl<'a, 'b> Bencher<'a, 'b> {
         self.with_inputs(|| ()).bench_local_values(|_: ()| benched());
     }
 
-    /// Benchmarks an async function on the current thread using a Tokio runtime.
+    /// Benchmarks an async function.
     ///
     /// This method requires the `async_tokio` feature to be enabled.
     ///
-    /// The async runtime is created once and reused for all iterations, avoiding
-    /// the high overhead of creating a new runtime for each iteration.
+    /// The function can be benchmarked in parallel using the [`threads`
+    /// option](macro@crate::bench#threads). If the function is strictly
+    /// single-threaded, use [`Bencher::bench_local_async`] instead.
+    ///
+    /// A tokio runtime is created per thread and reused for all iterations,
+    /// avoiding the high overhead of creating a new runtime for each iteration.
     ///
     /// # Examples
     ///
@@ -170,8 +174,8 @@ impl<'a, 'b> Bencher<'a, 'b> {
     ///
     /// This method requires the `async_tokio` feature to be enabled.
     ///
-    /// The async runtime is created once and reused for all iterations, avoiding
-    /// the high overhead of creating a new runtime for each iteration.
+    /// A tokio runtime is created and reused for all iterations,
+    /// avoiding the high overhead of creating a new runtime for each iteration.
     ///
     /// # Examples
     ///
@@ -552,8 +556,8 @@ where
     /// Per-iteration means the benchmarked function is called exactly once for
     /// each generated input.
     ///
-    /// The async runtime is created once and reused for all iterations, avoiding
-    /// the high overhead of creating a new runtime for each iteration.
+    /// A tokio runtime is created per thread and reused for all iterations,
+    /// avoiding the high overhead of creating a new runtime for each iteration.
     ///
     /// # Examples
     ///
@@ -601,8 +605,8 @@ where
     /// Per-iteration means the benchmarked function is called exactly once for
     /// each generated input.
     ///
-    /// The async runtime is created once and reused for all iterations, avoiding
-    /// the high overhead of creating a new runtime for each iteration.
+    /// A tokio runtime is created and reused for all iterations,
+    /// avoiding the high overhead of creating a new runtime for each iteration.
     ///
     /// # Examples
     ///
@@ -650,8 +654,8 @@ where
     /// Per-iteration means the benchmarked function is called exactly once for
     /// each generated input.
     ///
-    /// The async runtime is created once and reused for all iterations, avoiding
-    /// the high overhead of creating a new runtime for each iteration.
+    /// A tokio runtime is created per thread and reused for all iterations,
+    /// avoiding the high overhead of creating a new runtime for each iteration.
     ///
     /// # Limitations
     ///
@@ -712,8 +716,8 @@ where
     /// Per-iteration means the benchmarked function is called exactly once for
     /// each generated input.
     ///
-    /// The async runtime is created once and reused for all iterations, avoiding
-    /// the high overhead of creating a new runtime for each iteration.
+    /// A tokio runtime is created and reused for all iterations,
+    /// avoiding the high overhead of creating a new runtime for each iteration.
     ///
     /// # Limitations
     ///
@@ -1716,12 +1720,23 @@ impl<'a> BenchContext<'a> {
     ///
     /// This method requires the `async_tokio` feature to be enabled.
     ///
-    /// The async runtime is created once per thread and reused for all iterations,
+    /// A tokio runtime is created per thread and reused for all iterations,
     /// avoiding the high overhead of creating a new runtime for each iteration.
     ///
     /// # Safety
     ///
-    /// See `bench_loop_threaded`.
+    /// If `self.threads` is 1, the incoming closures will not escape the
+    /// current thread. This guarantee ensures `bench_loop_async_local` can soundly
+    /// reuse this method with mutable non-`Sync` closures.
+    ///
+    /// When `benched` is called:
+    /// - `I` is guaranteed to be initialized.
+    /// - No external `&I` or `&mut I` exists.
+    ///
+    /// When `drop_input` is called:
+    /// - All instances of `O` returned from `benched` have been dropped.
+    /// - The same guarantees for `I` apply as in `benched`, unless `benched`
+    ///   escaped references to `I`.
     #[cfg(feature = "async_tokio")]
     fn bench_loop_async_threaded<I, O, Fut>(
         &mut self,
@@ -1732,16 +1747,29 @@ impl<'a> BenchContext<'a> {
     where
         Fut: std::future::Future<Output = O> + Send,
     {
-        // Create a tokio runtime once to reuse for all iterations.
-        // We use current_thread runtime to avoid the overhead of thread pools.
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .expect("Failed to create Tokio runtime");
+        use std::cell::RefCell;
+        
+        // Use thread-local runtime to ensure each thread has its own runtime.
+        // We use current_thread runtime because each OS thread running the
+        // benchmark only needs to execute futures sequentially, one at a time.
+        thread_local! {
+            static RUNTIME: RefCell<Option<tokio::runtime::Runtime>> = RefCell::new(None);
+        }
 
-        // Wrap the benched closure to use block_on
+        // Wrap the benched closure to use thread-local block_on
         let benched_sync = |input: &UnsafeCell<MaybeUninit<I>>| -> O {
-            let future = benched(input);
-            runtime.block_on(future)
+            RUNTIME.with(|rt_cell| {
+                let mut rt = rt_cell.borrow_mut();
+                if rt.is_none() {
+                    *rt = Some(
+                        tokio::runtime::Builder::new_current_thread()
+                            .build()
+                            .expect("Failed to create Tokio runtime"),
+                    );
+                }
+                let future = benched(input);
+                rt.as_ref().unwrap().block_on(future)
+            })
         };
 
         // Delegate to the regular bench_loop_threaded with the wrapped closure
