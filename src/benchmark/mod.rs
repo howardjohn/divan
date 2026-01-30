@@ -1748,7 +1748,7 @@ impl<'a> BenchContext<'a> {
         Fut: std::future::Future<Output = O> + Send,
     {
         use std::cell::RefCell;
-        
+
         // Use thread-local runtime to ensure each thread has its own runtime.
         // We use current_thread runtime because each OS thread running the
         // benchmark only needs to execute futures sequentially, one at a time.
@@ -1764,7 +1764,7 @@ impl<'a> BenchContext<'a> {
                     *rt = Some(
                         tokio::runtime::Builder::new_current_thread()
                             .build()
-                            .expect("Failed to create Tokio runtime"),
+                            .expect("Failed to create Tokio runtime for async benchmark"),
                     );
                 }
                 let future = benched(input);
