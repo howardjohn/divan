@@ -653,6 +653,14 @@ where
     /// The async runtime is created once and reused for all iterations, avoiding
     /// the high overhead of creating a new runtime for each iteration.
     ///
+    /// # Limitations
+    ///
+    /// Due to current limitations with async closures and lifetimes in Rust,
+    /// using this method may result in lifetime errors when the async block
+    /// captures the mutable reference. In such cases, consider using
+    /// [`bench_async_values`](Self::bench_async_values) instead and taking
+    /// ownership of the input.
+    ///
     /// # Examples
     ///
     /// ```ignore
@@ -706,6 +714,14 @@ where
     ///
     /// The async runtime is created once and reused for all iterations, avoiding
     /// the high overhead of creating a new runtime for each iteration.
+    ///
+    /// # Limitations
+    ///
+    /// Due to current limitations with async closures and lifetimes in Rust,
+    /// using this method may result in lifetime errors when the async block
+    /// captures the mutable reference. In such cases, consider using
+    /// [`bench_local_async_values`](Self::bench_local_async_values) instead and taking
+    /// ownership of the input.
     ///
     /// # Examples
     ///
